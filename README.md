@@ -114,6 +114,12 @@ nano .env
 IPQS_KEY=你的IPQualityScore密钥
 ABUSEIPDB_KEY=你的AbuseIPDB密钥(可选)
 REDIS_HOST=redis
+
+# 大模型配置 (可选，用于增强 IP 类型判断)
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=你的API密钥
+LLM_MODEL=gpt-3.5-turbo
+
 ```
 
 ### 4. 启动服务
