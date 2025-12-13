@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js';
 import { Doughnut } from 'react-chartjs-2';
 import axios from 'axios';
-import { detectWebRTCLeak, getCanvasFingerprint, getNavigatorFingerprint } from '../utils/fingerprint';
+import { detectWebRTCLeak, getCanvasFingerprint, getNavigatorFingerprint, getPublicIP } from '../utils/fingerprint';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 ChartJS.register(ArcElement, Tooltip, Legend);
 
@@ -10,11 +12,24 @@ export function Dashboard() {
     const [ipData, setIpData] = useState(null);
     const [fingerprint, setFingerprint] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
 
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const res = await axios.get('/api/check');
+                // First, get the user's real public IP
+                let publicIP;
+                try {
+                    publicIP = await getPublicIP();
+                } catch (ipError) {
+                    console.error("Failed to get public IP:", ipError);
+                    setError("无法检测到您的公网 IP 地址。请检查网络连接。");
+                    setLoading(false);
+                    return;
+                }
+
+                // Then use that IP to check quality
+                const res = await axios.get(`/api/check?ip=${publicIP}`);
                 setIpData(res.data);
 
                 const fp = {
@@ -25,6 +40,7 @@ export function Dashboard() {
                 setFingerprint(fp);
             } catch (error) {
                 console.error("Error fetching data:", error);
+                setError("获取 IP 质量数据时出错：" + error.message);
             } finally {
                 setLoading(false);
             }
@@ -36,6 +52,21 @@ export function Dashboard() {
     if (loading) return (
         <div className="min-h-screen flex items-center justify-center bg-brand-bg">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-green-dark"></div>
+        </div>
+    );
+
+    if (error) return (
+        <div className="min-h-screen flex items-center justify-center bg-brand-bg">
+            <div className="max-w-md p-6 bg-red-50 border border-red-200 rounded-lg">
+                <h2 className="text-xl font-bold text-red-800 mb-2">错误</h2>
+                <p className="text-red-700">{error}</p>
+                <button
+                    onClick={() => window.location.reload()}
+                    className="mt-4 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+                >
+                    重试
+                </button>
+            </div>
         </div>
     );
 
@@ -173,15 +204,34 @@ export function Dashboard() {
 
                 {/* AI Analysis Report Card */}
                 {ipData?.aiReasoning && (
-                    <div className="card md:col-span-3 bg-gradient-to-br from-white to-blue-50 border border-blue-100">
-                        <div className="flex items-center mb-4">
-                            <span className="text-2xl mr-2">🤖</span>
-                            <h2 className="text-xl font-semibold text-gray-800">AI 智能分析报告</h2>
+                    <div className="card md:col-span-3 bg-gradient-to-br from-white to-emerald-50/30 border border-emerald-100 shadow-lg overflow-hidden">
+                        <div className="flex items-center mb-6 border-b border-emerald-100 pb-4">
+                            <div className="bg-emerald-100 p-2 rounded-lg mr-3">
+                                <span className="text-2xl">🤖</span>
+                            </div>
+                            <div>
+                                <h2 className="text-xl font-bold text-emerald-900">AI 智能分析报告</h2>
+                                <p className="text-xs text-emerald-600 mt-0.5">基于多源数据的深度综合评估</p>
+                            </div>
                         </div>
-                        <div className="prose prose-sm max-w-none bg-white p-4 rounded-lg border border-gray-100 shadow-sm overflow-x-auto">
-                            <pre className="whitespace-pre-wrap font-sans text-gray-700 text-sm">
+
+                        <div className="prose prose-sm max-w-none prose-headings:text-emerald-900 prose-p:text-gray-700 prose-strong:text-emerald-800 prose-ul:marker:text-emerald-500">
+                            <ReactMarkdown
+                                remarkPlugins={[remarkGfm]}
+                                components={{
+                                    h2: ({ node, ...props }) => <h2 className="text-lg font-bold text-emerald-800 border-l-4 border-emerald-500 pl-3 mt-6 mb-3 bg-emerald-50/50 py-1" {...props} />,
+                                    h3: ({ node, ...props }) => <h3 className="text-base font-semibold text-emerald-700 mt-4 mb-2 flex items-center" {...props} />,
+                                    table: ({ node, ...props }) => <div className="overflow-x-auto my-4 rounded-lg border border-emerald-100 shadow-sm"><table className="min-w-full divide-y divide-emerald-100" {...props} /></div>,
+                                    thead: ({ node, ...props }) => <thead className="bg-emerald-50" {...props} />,
+                                    th: ({ node, ...props }) => <th className="px-3 py-2 text-left text-xs font-medium text-emerald-800 uppercase tracking-wider" {...props} />,
+                                    td: ({ node, ...props }) => <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-600 border-t border-emerald-50" {...props} />,
+                                    li: ({ node, ...props }) => <li className="text-gray-700 my-1" {...props} />,
+                                    strong: ({ node, ...props }) => <strong className="font-semibold text-emerald-900 bg-emerald-50 px-1 rounded" {...props} />,
+                                    blockquote: ({ node, ...props }) => <blockquote className="border-l-4 border-emerald-300 pl-4 italic text-gray-600 bg-gray-50 py-2 pr-2 rounded-r my-4" {...props} />
+                                }}
+                            >
                                 {ipData.aiReasoning}
-                            </pre>
+                            </ReactMarkdown>
                         </div>
                     </div>
                 )}

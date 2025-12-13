@@ -88,3 +88,32 @@ export function getNavigatorFingerprint() {
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     };
 }
+
+export async function getPublicIP() {
+    // Try multiple IP detection services for redundancy
+    const services = [
+        'https://api.ipify.org?format=json',
+        'https://api64.ipify.org?format=json',
+        'https://api.ip.sb/jsonip',
+        'https://ipapi.co/json/',
+    ];
+
+    for (const service of services) {
+        try {
+            const response = await fetch(service, { timeout: 3000 });
+            const data = await response.json();
+
+            // Different services use different field names
+            const ip = data.ip || data.query;
+
+            if (ip && ip !== '127.0.0.1' && !ip.startsWith('192.168.') && !ip.startsWith('10.')) {
+                return ip;
+            }
+        } catch (error) {
+            console.warn(`Failed to fetch IP from ${service}:`, error);
+            continue;
+        }
+    }
+
+    throw new Error('Unable to detect public IP address');
+}

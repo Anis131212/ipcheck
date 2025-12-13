@@ -18,18 +18,27 @@ export async function checkIPQuality(ip) {
             name: 'ipqs',
             url: `https://www.ipqualityscore.com/api/json/ip/${process.env.IPQS_KEY}/${ip}`,
             enabled: !!process.env.IPQS_KEY,
-            transform: (d) => ({
-                fraudScore: d.fraud_score,
-                isVpn: d.vpn,
-                isProxy: d.proxy,
-                isTor: d.tor,
-                country_code: d.country_code,
-                city: d.city,
-                ISP: d.ISP,
-                ASN: d.ASN,
-                connection_type: d.connection_type, // Residential, Mobile, Corporate, Data Center
-                organization: d.organization
-            })
+            transform: (d) => {
+                // Check if IPQS returned an error
+                if (d.success === false) {
+                    throw new Error(d.message || 'IPQS API returned error');
+                }
+                return {
+                    fraudScore: d.fraud_score !== undefined ? d.fraud_score : null,
+                    isVpn: d.vpn,
+                    isProxy: d.proxy,
+                    isTor: d.tor,
+                    country_code: d.country_code,
+                    city: d.city,
+                    ISP: d.ISP,
+                    isp: d.ISP, // Provide lowercase version for consistency
+                    ASN: d.ASN,
+                    asn: d.ASN, // Provide lowercase version for consistency
+                    connection_type: d.connection_type, // Residential, Mobile, Corporate, Data Center
+                    organization: d.organization,
+                    ipqs_success: d.success
+                };
+            }
         },
         {
             name: 'ipapi',
@@ -41,7 +50,8 @@ export async function checkIPQuality(ip) {
                 city: d.city,
                 isp: d.isp,
                 org: d.org,
-                as: d.as,
+                as: d.as, // Keep 'as' field with prefix (e.g., "AS15169")
+                asn: d.as, // Also provide as 'asn' for consistency
                 isHosting: d.hosting,
                 isMobile: d.mobile,
                 lat: d.lat,
@@ -53,13 +63,24 @@ export async function checkIPQuality(ip) {
             name: 'abuseipdb',
             url: 'https://api.abuseipdb.com/api/v2/check',
             enabled: !!process.env.ABUSEIPDB_KEY,
-            headers: { Key: process.env.ABUSEIPDB_KEY },
+            headers: {
+                'Key': process.env.ABUSEIPDB_KEY,
+                'Accept': 'application/json'
+            },
             params: { ipAddress: ip, maxAgeInDays: 90 },
-            transform: (d) => ({
-                abuseScore: d.data?.abuseConfidenceScore,
-                usageType: d.data?.usageType, // Data Center/Web Hosting/Transit, Fixed Line ISP, etc.
-                domain: d.data?.domain
-            })
+            transform: (d) => {
+                // Check for errors in response
+                if (d.errors) {
+                    throw new Error(JSON.stringify(d.errors));
+                }
+                return {
+                    abuseScore: d.data?.abuseConfidenceScore !== undefined ? d.data.abuseConfidenceScore : null,
+                    lastReportedAt: d.data?.lastReportedAt,
+                    usageType: d.data?.usageType, // Data Center/Web Hosting/Transit, Fixed Line ISP, etc.
+                    domain: d.data?.domain,
+                    totalReports: d.data?.totalReports
+                };
+            }
         },
         {
             name: 'ip2location',
@@ -69,19 +90,11 @@ export async function checkIPQuality(ip) {
             transform: (d) => ({
                 ip2location_proxy: d.is_proxy ? 'Yes' : 'No',
                 ip2location_usage: d.usage_type,
-                ip2location_country: d.country_name
+                ip2location_country: d.country_name,
+                ip2location_country_code: d.country_code
             })
         },
-        {
-            name: 'scamalytics',
-            url: `https://api11.scamalytics.com/${process.env.SCAMALYTICS_USERNAME}/`,
-            enabled: !!process.env.SCAMALYTICS_USERNAME && !!process.env.SCAMALYTICS_KEY,
-            params: { key: process.env.SCAMALYTICS_KEY, ip: ip },
-            transform: (d) => ({
-                scamalytics_score: d.score, // 0-100
-                scamalytics_risk: d.risk // low, medium, high, very high
-            })
-        },
+
         {
             name: 'ipdata',
             url: `https://api.ipdata.co/${ip}`,
@@ -93,45 +106,211 @@ export async function checkIPQuality(ip) {
                 ipdata_proxy: d.threat?.is_proxy,
                 ipdata_abuse: d.threat?.is_known_attacker
             })
+        },
+        {
+            name: 'cloudflare_asn',
+            // Note: This API returns bot traffic statistics for an entire ASN (not individual IPs)
+            // We use this as a heuristic: if an IP's ASN has high bot traffic, the IP may be suspicious
+            url: null, // Will be set dynamically after we get the ASN
+            enabled: !!process.env.CLOUDFLARE_API_TOKEN,
+            requiresASN: true, // Special flag to indicate this API needs ASN first
+            headers: { 'Authorization': `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` },
+            buildUrl: (asn) => {
+                // Extract numeric ASN from formats like "AS15169", "AS15169 Google LLC", or "15169"
+                const asnString = asn.toString();
+                const match = asnString.match(/\d+/); // Extract first sequence of digits
+                if (!match) {
+                    throw new Error(`Invalid ASN format: ${asnString}`);
+                }
+                const asnNumber = match[0];
+                return `https://api.cloudflare.com/client/v4/radar/http/summary/bot_class?asn=${asnNumber}&dateRange=7d&format=json`;
+            },
+            transform: (d) => {
+                if (!d.success || !d.result?.summary_0) {
+                    throw new Error('Invalid Cloudflare API response');
+                }
+                const summary = d.result.summary_0;
+                // API returns lowercase 'bot' and 'human', not 'AUTOMATED' and 'HUMAN'
+                const botPct = parseFloat(summary.bot || summary.AUTOMATED || 0);
+                const humanPct = parseFloat(summary.human || summary.HUMAN || 0);
+
+                return {
+                    cf_asn_human_pct: humanPct,
+                    cf_asn_bot_pct: botPct,
+                    cf_asn_likely_bot: botPct > 50, // More than 50% bot traffic
+                    cf_date_range: d.result.meta?.dateRange,
+                    cf_confidence_level: d.result.meta?.confidenceInfo?.level
+                };
+            }
         }
     ];
 
-    // Filter enabled APIs
-    const activeApis = apis.filter(api => api.enabled);
+    // Filter enabled APIs - separate regular APIs from ASN-dependent APIs
+    const regularApis = apis.filter(api => api.enabled && !api.requiresASN);
+    const asnDependentApis = apis.filter(api => api.enabled && api.requiresASN);
 
-    // Concurrent requests
+    // Phase 1: Call regular APIs to get basic info including ASN
     const results = await Promise.allSettled(
-        activeApis.map(api =>
+        regularApis.map(api =>
             axios.get(api.url, {
                 timeout: API_TIMEOUT,
                 headers: api.headers,
                 params: api.params
             })
-                .then(res => ({ source: api.name, data: api.transform(res.data) }))
-                .catch(err => ({ source: api.name, error: err.message }))
+                .then(res => {
+                    console.log(`[${api.name}] API call successful for IP ${ip}`);
+                    console.log(`[${api.name}] Raw response status:`, res.status);
+
+                    try {
+                        const transformed = api.transform(res.data);
+                        console.log(`[${api.name}] Transformed data:`, JSON.stringify(transformed, null, 2));
+                        return { source: api.name, data: transformed };
+                    } catch (transformError) {
+                        console.error(`[${api.name}] Transform error:`, transformError.message);
+                        console.error(`[${api.name}] Raw response data:`, JSON.stringify(res.data, null, 2));
+                        return { source: api.name, error: `Transform error: ${transformError.message}` };
+                    }
+                })
+                .catch(err => {
+                    console.error(`[${api.name}] API call failed for IP ${ip}:`, err.message);
+                    if (err.response) {
+                        console.error(`[${api.name}] Response status:`, err.response.status);
+                        console.error(`[${api.name}] Response data:`, JSON.stringify(err.response.data, null, 2));
+                    } else if (err.request) {
+                        console.error(`[${api.name}] No response received`);
+                    } else {
+                        console.error(`[${api.name}] Request setup error:`, err.message);
+                    }
+                    return { source: api.name, error: err.message };
+                })
         )
     );
 
     // Aggregate results
-    const successful = results
+    let successful = results
         .filter(r => r.status === 'fulfilled' && !r.value.error)
         .map(r => r.value);
 
-    const errors = results
+    let errors = results
         .filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && r.value.error))
-        .map(r => r.status === 'rejected' ? r.reason : r.value.error);
+        .map(r => {
+            if (r.status === 'rejected') {
+                return { source: 'unknown', error: r.reason };
+            }
+            return { source: r.value.source, error: r.value.error };
+        });
+
+    // Phase 2: Call ASN-dependent APIs if we have ASN data
+    let asnResults = [];
+    const mergedPhase1 = mergeResults(successful);
+    const asn = mergedPhase1.asn || mergedPhase1.ASN || mergedPhase1.as;
+
+    if (asn && asnDependentApis.length > 0) {
+        console.log(`\n[Phase 2] Calling ASN-dependent APIs with ASN: ${asn}`);
+
+        asnResults = await Promise.allSettled(
+            asnDependentApis.map(api => {
+                const url = api.buildUrl(asn);
+                return axios.get(url, {
+                    timeout: API_TIMEOUT,
+                    headers: api.headers
+                })
+                    .then(res => {
+                        console.log(`[${api.name}] API call successful for ASN ${asn}`);
+                        console.log(`[${api.name}] Raw response status:`, res.status);
+
+                        try {
+                            const transformed = api.transform(res.data);
+                            console.log(`[${api.name}] Transformed data:`, JSON.stringify(transformed, null, 2));
+                            return { source: api.name, data: transformed };
+                        } catch (transformError) {
+                            console.error(`[${api.name}] Transform error:`, transformError.message);
+                            console.error(`[${api.name}] Raw response data:`, JSON.stringify(res.data, null, 2));
+                            return { source: api.name, error: `Transform error: ${transformError.message}` };
+                        }
+                    })
+                    .catch(err => {
+                        console.error(`[${api.name}] API call failed for ASN ${asn}:`, err.message);
+                        if (err.response) {
+                            console.error(`[${api.name}] Response status:`, err.response.status);
+                            console.error(`[${api.name}] Response data:`, JSON.stringify(err.response.data, null, 2));
+                        }
+                        return { source: api.name, error: err.message };
+                    });
+            })
+        );
+
+        // Merge ASN-dependent results
+        const asnSuccessful = asnResults
+            .filter(r => r.status === 'fulfilled' && !r.value.error)
+            .map(r => r.value);
+
+        const asnErrors = asnResults
+            .filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && r.value.error))
+            .map(r => {
+                if (r.status === 'rejected') {
+                    return { source: 'unknown', error: r.reason };
+                }
+                return { source: r.value.source, error: r.value.error };
+            });
+
+        // Combine with phase 1 results
+        successful = [...successful, ...asnSuccessful];
+        errors = [...errors, ...asnErrors];
+    }
+
+    // Log summary
+    console.log(`\n=== IP Check Summary for ${ip} ===`);
+    console.log(`Total APIs called: ${results.length + asnResults.length}`);
+    console.log(`Successful: ${successful.length} (${successful.map(s => s.source).join(', ')})`);
+    console.log(`Failed: ${errors.length} (${errors.map(e => e.source).join(', ')})`);
+
+    // Log errors for debugging
+    if (errors.length > 0) {
+        console.warn(`\nAPI Errors:`);
+        errors.forEach(e => {
+            console.warn(`  - ${e.source}: ${e.error}`);
+        });
+    }
 
     let merged = mergeResults(successful);
+    console.log(`\nMerged data keys:`, Object.keys(merged).join(', '));
+    console.log(`Fraud Score:`, merged.fraudScore);
+    console.log(`Abuse Score:`, merged.abuseScore);
+    console.log(`Cloudflare ASN Bot %:`, merged.cf_asn_bot_pct);
+    console.log(`===========================\n`);
 
-    // Native vs Broadcast Logic (Heuristic)
-    const isNative = true; // Placeholder
+    // Native vs Broadcast Logic
+    // Compare country codes from different sources to determine if IP is native or broadcast
+    let isNative = true; // Default assumption
+    let nativeReason = 'Insufficient data to determine';
+
+    // Get country codes from different sources
+    const geoCountry = merged.countryCode || merged.country_code; // From ip-api
+    const ip2locCountry = merged.ip2location_country_code; // From ip2location
+    const ipqsCountry = merged.country_code; // From IPQS (if available)
+
+    if (geoCountry && ip2locCountry) {
+        if (geoCountry === ip2locCountry) {
+            isNative = true;
+            nativeReason = `Country codes match (${geoCountry})`;
+        } else {
+            isNative = false;
+            nativeReason = `Country mismatch: Geo=${geoCountry}, IP2Loc=${ip2locCountry}`;
+        }
+    } else if (geoCountry) {
+        nativeReason = `Only geo location available (${geoCountry}), assumed native`;
+    }
 
     // Dual ISP Logic
     const isDualIsp = merged.isp && merged.org && merged.isp !== merged.org;
 
     // Add inferred data to merged object for LLM
     merged.isNative = isNative;
+    merged.nativeReason = nativeReason;
     merged.isDualIsp = isDualIsp;
+    merged.sources = successful.map(r => r.source);
+    merged.apiErrors = errors.length > 0 ? errors : undefined;
 
     // Advanced Classification Logic
     let ipType = 'Unknown';
@@ -182,21 +361,16 @@ export async function checkIPQuality(ip) {
     else if (ipType.includes('Corporate') || ipType.includes('Commercial') || ipType.includes('Business')) displayType = '商业 IP (Commercial)';
     else if (ipType.includes('Education') || ipType.includes('University') || ipType.includes('School')) displayType = '教育 IP (Education)';
 
-    // Native vs Broadcast Logic (Heuristic)
-    const isNative = true; // Placeholder
-
-    // Dual ISP Logic
-    const isDualIsp = merged.isp && merged.org && merged.isp !== merged.org;
-
     return {
         ip,
         ...merged,
         ipType: displayType,
         aiReasoning,
         isNative,
+        nativeReason,
         isDualIsp,
         sources: successful.map(r => r.source),
-        errors: errors.length > 0 ? errors : undefined,
+        apiErrors: errors.length > 0 ? errors : undefined,
         timestamp: new Date().toISOString()
     };
 }
@@ -225,18 +399,20 @@ async function analyzeWithLLM(data, ip) {
 | 数据源 | 关注项 | 评判标准 |
 |--------|--------|----------|
 | ip2location | Proxy Data | 若显示VPN/abuse则严重扣分（此库对滥用不敏感，一旦标记问题很大）|
-| scamalytics | Fraud Score | 家宽正常5-25分；高分基本烂完，易被CF骑脸 |
 | ipdata | Threats | 为0正常；有abuse/tor/proxy标记则扣分 |
-| Cloudflare Radar | Bot vs Human | 机器人占比>30%易跳盾，>50%频繁跳盾 |
+| Cloudflare Radar | Bot Score | 机器人评分(1-100)。>30易跳盾，>50频繁跳盾 (如有数据) |
 
 #### 中权重指标
 | 数据源 | 关注项 | 评判标准 |
 |--------|--------|----------|
 | IPQS | Fraud Score | 75+=可疑，85+=风险，90+=高风险 |
 | IPQS | Proxy/VPN/TOR/Recent Abuse/Bot | 任一为true需关注 |
+| AbuseIPDB | Abuse Score | >0 即有黑历史，分数越高越危险 |
 
 #### 低权重/参考指标
-- ping0的风控值/共享人数/大模型检测（不准确，仅看ASN和原生/广播）
+- **原生/广播检测**：基于注册国家(Reg)与实际地理位置(Geo)的比对。
+  - 一致 = 原生 IP (Native)
+  - 不一致 = 广播 IP (Broadcast) -> 风险略高，可能影响部分服务定位
 - iplark（娱乐库，仅参考地理位置聚合）
 
 ### 3. 实测验证（如有）
@@ -299,29 +475,36 @@ async function analyzeWithLLM(data, ip) {
     IP: ${ip}
     ISP: ${data.isp || data.ISP || 'Unknown'}
     Organization: ${data.org || data.organization || 'Unknown'}
-    ASN: ${data.asn || data.ASN || 'Unknown'}
+    ASN: ${data.asn || data.ASN || data.as || 'Unknown'}
     Hosting: ${data.isHosting ? 'Yes' : 'No'}
     Mobile: ${data.isMobile ? 'Yes' : 'No'}
-    Country: ${data.country || data.country_code || 'Unknown'}
-    
+    Country (Geo): ${data.country || 'Unknown'} (${data.countryCode || data.country_code || 'N/A'})
+    Country (IP2Location): ${data.ip2location_country || 'N/A'} (${data.ip2location_country_code || 'N/A'})
+    City: ${data.city || 'Unknown'}
+    Connection Type: ${data.connection_type || 'N/A'}
+
     Risk Data:
-    - Fraud Score (IPQS): ${data.fraudScore || 'N/A'}
-    - Abuse Score (AbuseIPDB): ${data.abuseScore || 'N/A'}
-    - Scamalytics Score: ${data.scamalytics_score || 'N/A'} (${data.scamalytics_risk || 'Unknown'})
-    - IPData Threats: ${data.ipdata_threats ? 'Detected' : 'None'} (Tor: ${data.ipdata_tor}, Proxy: ${data.ipdata_proxy}, Abuse: ${data.ipdata_abuse})
-    - IP2Location Proxy: ${data.ip2location_proxy || 'N/A'} (Usage: ${data.ip2location_usage || 'N/A'})
+    - Fraud Score (IPQS): ${data.fraudScore !== undefined ? data.fraudScore : 'N/A'}
+    - Abuse Score (AbuseIPDB): ${data.abuseScore !== undefined ? data.abuseScore : 'N/A'} (Last Reported: ${data.lastReportedAt || 'None'})
+    - IPData Threats: ${data.ipdata_threats ? 'Detected' : 'None'} (Tor: ${data.ipdata_tor || 'N/A'}, Proxy: ${data.ipdata_proxy || 'N/A'}, Abuse: ${data.ipdata_abuse || 'N/A'})
+    - IP2Location Proxy: ${data.ip2location_proxy || 'N/A'} (Usage Type: ${data.ip2location_usage || 'N/A'})
     - VPN: ${data.isVpn ? 'Yes' : 'No'}
     - Proxy: ${data.isProxy ? 'Yes' : 'No'}
     - Tor: ${data.isTor ? 'Yes' : 'No'}
-    
-    Inferred Data (Heuristic):
-    - Native/Broadcast: ${data.isNative ? 'Likely Native' : 'Likely Broadcast'} (Note: Heuristic only, no Ping0 data)
-    - Dual ISP: ${data.isDualIsp ? 'Yes' : 'No'} (ISP != Org)
-    
-    Missing Data (Not Tested/Available):
-    - Cloudflare Radar: N/A
-    - Connectivity Tests (Google/YouTube/etc): Not Tested (Server-side analysis only)
+
+    Inferred Data:
+    - Native/Broadcast: ${data.isNative ? 'Native IP' : 'Broadcast IP'} (Reason: ${data.nativeReason || 'Not calculated'})
+    - Dual ISP: ${data.isDualIsp ? 'Yes - ISP and Org are different' : 'No - ISP and Org are same or unknown'}
+
+    Additional Data:
+    - Cloudflare ASN Bot Traffic: ${data.cf_asn_bot_pct !== undefined ? data.cf_asn_bot_pct.toFixed(1) + '% AUTOMATED, ' + data.cf_asn_human_pct.toFixed(1) + '% HUMAN (ASN-level heuristic, past 7 days)' : 'N/A'}
+    - ASN Bot Risk: ${data.cf_asn_likely_bot ? 'HIGH (>50% bot traffic in ASN)' : data.cf_asn_bot_pct !== undefined ? 'LOW (<50% bot traffic in ASN)' : 'N/A'}
+    - Connectivity Tests (Google/YouTube/etc): See Frontend Results
     - Streaming Unlock: Not Tested
+    - Data Sources: ${data.sources ? data.sources.join(', ') : 'Unknown'}
+    - API Errors: ${data.apiErrors && data.apiErrors.length > 0 ? data.apiErrors.map(e => e.source + ': ' + e.error).join('; ') : 'None'}
+
+    Note: Cloudflare data is at ASN level (represents the entire network/organization), not individual IP level.
     `;
 
     try {
