@@ -6,10 +6,66 @@
 
 - **多源 IP 检测**: 聚合 IPQualityScore, ip-api.com, AbuseIPDB 等多个数据源。
 - **风险评分**: 直观的仪表盘展示 IP 欺诈分数和风险等级。
+- **深度 IP 分析**:
+    - **IP 类型识别**: 区分住宅 (Residential)、移动 (Mobile)、数据中心 (Data Center) 等。
+    - **原生/广播检测**: 基于地理位置一致性判断 IP 属性。
+    - **双 ISP 检测**: 分析 ISP 与 ASN 组织的一致性。
 - **环境一致性检测**: 自动对比 WebRTC IP 与连接 IP，检测时区和语言一致性。
 - **连通性测试**: 内置 Google, YouTube, GitHub 连通性测试。
 - **高性能**: 后端采用 Fastify，支持 Redis 缓存和高并发。
 - **现代化 UI**: 清新绿色的 React 前端界面，适配移动端。
+
+## 技术原理与核心代码
+
+本系统采用多层检测机制来评估 IP 质量。
+
+### 1. 多源数据聚合与 IP 分类
+后端通过并发请求多个第三方 API (IPQS, AbuseIPDB, ip-api) 获取 IP 的详细信息，并进行加权分析。
+
+**核心逻辑 (`backend/src/services/ipCheck.js`):**
+```javascript
+// 并发请求多个 API
+const results = await Promise.allSettled(activeApis.map(api => axios.get(api.url, ...)));
+
+// 智能分类逻辑
+let ipType = 'Unknown';
+if (merged.connection_type) {
+    ipType = merged.connection_type; // 优先使用 IPQS 的分类
+} else if (merged.usageType) {
+    ipType = merged.usageType; // AbuseIPDB 作为补充
+} else if (merged.isHosting) {
+    ipType = 'Data Center'; // ip-api 的 hosting 标记
+}
+
+// 双 ISP 检测原理: 比较 ISP 名称与 ASN 组织名称
+const isDualIsp = merged.isp && merged.org && merged.isp !== merged.org;
+```
+
+### 2. 浏览器指纹与环境检测
+前端利用 WebRTC 和 Canvas API 获取浏览器指纹，并与 IP 信息进行比对，识别潜在的欺诈行为。
+
+**WebRTC 泄露检测 (`frontend/src/utils/fingerprint.js`):**
+```javascript
+// 利用 WebRTC RTCPeerConnection 获取真实 IP
+const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+pc.onicecandidate = (event) => {
+    if (event.candidate) {
+        const ipRegex = /([0-9]{1,3}(\.[0-9]{1,3}){3})/;
+        const match = ipRegex.exec(event.candidate.candidate);
+        if (match) ips.add(match[1]); // 捕获局域网和公网 IP
+    }
+};
+```
+
+**一致性检查 (`frontend/src/components/Dashboard.jsx`):**
+```javascript
+// 对比 WebRTC 获取的公网 IP 与 HTTP 连接 IP
+if (fingerprint.webrtc.public.length > 0 && ipData.ip) {
+    if (!fingerprint.webrtc.public.includes(ipData.ip)) {
+        issues.push('WebRTC 泄露真实 IP (与当前连接 IP 不一致)');
+    }
+}
+```
 
 ## 快速开始 (本地/开发)
 
