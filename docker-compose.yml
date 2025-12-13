@@ -53,7 +53,8 @@ services:
       # - ./nginx/ssl:/etc/nginx/ssl:ro # Uncomment when SSL is ready
     depends_on:
       - api
-      - frontend
+      frontend:
+        condition: service_healthy
     networks:
       - app-network
     restart: unless-stopped
@@ -63,6 +64,11 @@ services:
     build: ./frontend
     networks:
       - app-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:80"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
 volumes:
   redis_data:
