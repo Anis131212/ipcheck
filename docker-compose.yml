@@ -11,6 +11,10 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_MODEL=${LLM_MODEL}
+      - IP2LOCATION_KEY=${IP2LOCATION_KEY}
+      - SCAMALYTICS_USERNAME=${SCAMALYTICS_USERNAME}
+      - SCAMALYTICS_KEY=${SCAMALYTICS_KEY}
+      - IPDATA_KEY=${IPDATA_KEY}
     depends_on:
       - redis
     networks:

@@ -122,17 +122,12 @@ export function Dashboard() {
                         <InfoItem label="IP 类型" value={
                             <div className="flex flex-col">
                                 <span className={`font-bold ${ipData?.ipType?.includes('住宅') ? 'text-green-600' :
-                                        ipData?.ipType?.includes('移动') ? 'text-blue-600' :
-                                            ipData?.ipType?.includes('教育') ? 'text-purple-600' :
-                                                'text-yellow-600'
+                                    ipData?.ipType?.includes('移动') ? 'text-blue-600' :
+                                        ipData?.ipType?.includes('教育') ? 'text-purple-600' :
+                                            'text-yellow-600'
                                     }`}>
                                     {ipData?.ipType || '未知'}
                                 </span>
-                                {ipData?.aiReasoning && (
-                                    <span className="text-xs text-gray-500 mt-1 bg-blue-50 p-1 rounded border border-blue-100">
-                                        🤖 AI 分析: {ipData.aiReasoning}
-                                    </span>
-                                )}
                             </div>
                         } />
                         <InfoItem label="运营商 (ISP)" value={ipData?.isp || ipData?.ISP} />
@@ -175,6 +170,21 @@ export function Dashboard() {
                         </div>
                     </div>
                 </div>
+
+                {/* AI Analysis Report Card */}
+                {ipData?.aiReasoning && (
+                    <div className="card md:col-span-3 bg-gradient-to-br from-white to-blue-50 border border-blue-100">
+                        <div className="flex items-center mb-4">
+                            <span className="text-2xl mr-2">🤖</span>
+                            <h2 className="text-xl font-semibold text-gray-800">AI 智能分析报告</h2>
+                        </div>
+                        <div className="prose prose-sm max-w-none bg-white p-4 rounded-lg border border-gray-100 shadow-sm overflow-x-auto">
+                            <pre className="whitespace-pre-wrap font-sans text-gray-700 text-sm">
+                                {ipData.aiReasoning}
+                            </pre>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );
