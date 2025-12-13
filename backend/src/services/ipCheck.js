@@ -88,48 +88,112 @@ export async function checkIPQuality(ip) {
         .filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && r.value.error))
         .map(r => r.status === 'rejected' ? r.reason : r.value.error);
 
-    const merged = mergeResults(successful);
+    let merged = mergeResults(successful);
 
     // Advanced Classification Logic
     let ipType = 'Unknown';
-    if (merged.connection_type) {
-        ipType = merged.connection_type; // IPQS is usually accurate
-    } else if (merged.usageType) {
-        ipType = merged.usageType; // AbuseIPDB fallback
-    } else if (merged.isHosting) {
-        ipType = 'Data Center';
-    } else if (merged.isMobile) {
-        ipType = 'Mobile';
-    } else {
-        ipType = 'Residential'; // Default assumption if not hosting/mobile
+    let aiReasoning = null;
+
+    // Check if we need LLM analysis (if type is missing or "Premium required")
+    const needsLLM = !merged.connection_type || merged.connection_type.includes('Premium');
+
+    if (needsLLM && process.env.LLM_API_KEY && process.env.LLM_BASE_URL) {
+        try {
+            const llmResult = await analyzeWithLLM(merged, ip);
+            if (llmResult) {
+                ipType = llmResult.type;
+                aiReasoning = llmResult.reasoning;
+            }
+        } catch (error) {
+            console.error("LLM Analysis failed:", error.message);
+        }
+    }
+
+    // Fallback logic if LLM failed or not configured
+    if (ipType === 'Unknown') {
+        if (merged.connection_type && !merged.connection_type.includes('Premium')) {
+            ipType = merged.connection_type;
+        } else if (merged.usageType) {
+            ipType = merged.usageType;
+        } else if (merged.isHosting) {
+            ipType = 'Data Center';
+        } else if (merged.isMobile) {
+            ipType = 'Mobile';
+        } else {
+            ipType = 'Residential'; // Default assumption
+        }
     }
 
     // Normalize IP Type to user requested categories
     let displayType = ipType;
     if (ipType.includes('Residential') || ipType.includes('Fixed Line ISP')) displayType = '住宅 IP (Residential)';
-    else if (ipType.includes('Mobile')) displayType = '移动 IP (Mobile)';
-    else if (ipType.includes('Data Center') || ipType.includes('Hosting')) displayType = '数据中心 IP (Data Center)';
-    else if (ipType.includes('Corporate') || ipType.includes('Commercial')) displayType = '商业 IP (Commercial)';
-    else if (ipType.includes('Education') || ipType.includes('University')) displayType = '教育 IP (Education)';
+    else if (ipType.includes('Mobile') || ipType.includes('Cellular')) displayType = '移动 IP (Mobile)';
+    else if (ipType.includes('Data Center') || ipType.includes('Hosting') || ipType.includes('Transit')) displayType = '数据中心 IP (Data Center)';
+    else if (ipType.includes('Corporate') || ipType.includes('Commercial') || ipType.includes('Business')) displayType = '商业 IP (Commercial)';
+    else if (ipType.includes('Education') || ipType.includes('University') || ipType.includes('School')) displayType = '教育 IP (Education)';
 
     // Native vs Broadcast Logic (Heuristic)
-    // If IPQS country matches ip-api country, likely Native. 
-    // True detection requires WHOIS registration country vs Geo location.
-    // We will assume Native if consistent, Broadcast if conflicting or if specifically flagged.
-    const isNative = true; // Placeholder for now as we lack WHOIS DB
+    const isNative = true; // Placeholder
 
     // Dual ISP Logic
-    // If ISP name differs significantly from ASN Org, might be dual? 
     const isDualIsp = merged.isp && merged.org && merged.isp !== merged.org;
 
     return {
         ip,
         ...merged,
         ipType: displayType,
+        aiReasoning,
         isNative,
         isDualIsp,
         sources: successful.map(r => r.source),
         errors: errors.length > 0 ? errors : undefined,
         timestamp: new Date().toISOString()
     };
+}
+
+async function analyzeWithLLM(data, ip) {
+    const prompt = `
+    Analyze the following IP address information and classify the IP type.
+    IP: ${ip}
+    ISP: ${data.isp || data.ISP || 'Unknown'}
+    Organization: ${data.org || data.organization || 'Unknown'}
+    ASN: ${data.asn || data.ASN || 'Unknown'}
+    Hosting: ${data.isHosting ? 'Yes' : 'No'}
+    Mobile: ${data.isMobile ? 'Yes' : 'No'}
+    
+    Based on this, determine if the IP is one of the following types:
+    - Residential
+    - Mobile
+    - Data Center
+    - Commercial
+    - Education
+    
+    Return a JSON object with two fields:
+    "type": The classification name from the list above.
+    "reasoning": A brief explanation (max 1 sentence) of why you chose this type.
+    `;
+
+    try {
+        const response = await axios.post(`${process.env.LLM_BASE_URL}/chat/completions`, {
+            model: process.env.LLM_MODEL || 'gpt-3.5-turbo',
+            messages: [
+                { role: "system", content: "You are a network analysis expert. Return JSON only." },
+                { role: "user", content: prompt }
+            ],
+            temperature: 0.1,
+            response_format: { type: "json_object" }
+        }, {
+            headers: {
+                'Authorization': `Bearer ${process.env.LLM_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            timeout: 8000
+        });
+
+        const content = response.data.choices[0].message.content;
+        return JSON.parse(content);
+    } catch (error) {
+        console.error("LLM Request Error:", error.response?.data || error.message);
+        return null;
+    }
 }

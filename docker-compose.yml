@@ -8,6 +8,9 @@ services:
       - REDIS_HOST=redis
       - IPQS_KEY=${IPQS_KEY}
       - ABUSEIPDB_KEY=${ABUSEIPDB_KEY}
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL}
     depends_on:
       - redis
     networks:
